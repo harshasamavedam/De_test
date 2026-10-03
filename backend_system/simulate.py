@@ -22,7 +22,7 @@ from decimal import Decimal
 
 from shop import config
 from shop.simulator import SimParams, Simulator
-from shop.writer import Writer
+from shop.writer import DEFAULT_MAX_INFLIGHT, Writer
 
 
 def parse_users_per_day(value: str) -> tuple[int, int]:
@@ -67,6 +67,8 @@ def parse_args(argv=None):
                         help="drop and recreate the keyspace first")
     parser.add_argument("--dry-run", action="store_true",
                         help="generate in memory and print a summary, no DB writes")
+    parser.add_argument("--max-inflight", type=int, default=DEFAULT_MAX_INFLIGHT,
+                        help="max concurrent in-flight writes (default: %(default)s)")
     args = parser.parse_args(argv)
     if args.days < 1:
         parser.error("--days must be >= 1")
@@ -86,7 +88,8 @@ def main(argv=None) -> int:
         keyspace=args.keyspace,
         dirty=args.dirty,
     )
-    writer = Writer(args.host, args.port, args.keyspace, dry_run=args.dry_run)
+    writer = Writer(args.host, args.port, args.keyspace, dry_run=args.dry_run,
+                    max_inflight=args.max_inflight)
     simulator = Simulator(params, writer)
     summary = simulator.run(reset=args.reset)
 
