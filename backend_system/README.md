@@ -1,258 +1,278 @@
-# Payments Orders System - Backend
+# Payments Orders System - Backend & Commerce Simulator
 
 ## Overview
 
-This directory contains the Payments Orders System backend. Orders and payments are separated into logical service modules but currently run together in one FastAPI process. Cassandra is the persistence layer. The architecture below reflects the current implementation; RabbitMQ, Redis, and Prometheus/Grafana are not currently connected to the runtime.
+This directory contains the backend for a small e-commerce platform and the
+synthetic data simulator that feeds it.
 
-## Architecture
+There are two coexisting parts:
 
-```mermaid
-flowchart LR
-  Client[API Client]
-  FastAPI[FastAPI app<br/>main.py<br/>REST routes]
-  Orchestrator[PaymentsOrdersSystem<br/>request orchestration]
-  OrderService[OrdersService<br/>business rules and status transitions]
-  PaymentService[PaymentsService<br/>payment lifecycle]
-  OrderRepo[OrdersRepository<br/>Cassandra queries]
-  PaymentRepo[PaymentsRepository<br/>Cassandra queries]
-  Cassandra[(Cassandra 5<br/>payments keyspace)]
+1. **Legacy payments system** (`orders_service/`, `payments_service/`,
+   `main.py`) - the original FastAPI + Cassandra service. It stays in the
+   `payments` keyspace and is left as-is.
+2. **Commerce platform + simulator** (`shop/`, `simulate.py`) - the new,
+   query-first Cassandra model for users, traffic, carts, orders, payments and
+   a day-level synthetic data engine with realistic, intentionally dirty data.
 
-  Setup[cassandra_setup.py<br/>create keyspace and tables]
-  OrderSeed[generate_data.py<br/>synthetic customers, orders,<br/>payments, product variants]
-  DemoSeed[populate_customer_orders.py<br/>300 demo customers, orders,<br/>and order-item links]
-  Verify[verify_cassandra.py<br/>database checks]
+The simulator is the main deliverable: APIs are a reference surface, but the
+day-to-day work is running the simulator to generate near real-world data and
+its ground-truth quality manifest for the data team.
 
-  Client -->|HTTP / JSON| FastAPI
-  FastAPI --> Orchestrator
-  Orchestrator --> OrderService
-  Orchestrator --> PaymentService
-  OrderService --> OrderRepo
-  PaymentService --> PaymentRepo
-  OrderRepo --> Cassandra
-  PaymentRepo --> Cassandra
+---
 
-  Setup --> Cassandra
-  OrderSeed --> Cassandra
-  DemoSeed --> Cassandra
-  Verify --> Cassandra
-
-  subgraph Tables[payments keyspace tables]
-    Orders[(orders_table)]
-    Payments[(payments_table)]
-    Customers[(customers_table)]
-    Products[(product_item)]
-    CustomerItems[(customer_order_items_by_customer)]
-  end
-  Cassandra --- Orders
-  Cassandra --- Payments
-  Cassandra --- Customers
-  Cassandra --- Products
-  Cassandra --- CustomerItems
-```
-
-### Request and data paths
-
-1. API clients call the FastAPI routes in `main.py` (orders, payments, root, and statistics).
-2. `PaymentsOrdersSystem` delegates order and payment operations to the corresponding service module.
-3. Services apply lifecycle/business rules and use their repositories to read/write Cassandra.
-4. Setup, generation, and verification scripts connect to Cassandra directly; they do not pass through the HTTP API.
-
-### Cassandra tables
-
-- `orders_table`: order records, partitioned by `order_id`.
-- `payments_table`: payment records, partitioned by `payment_id`.
-- `customers_table`: synthetic customer profile and location fields, keyed by `customer_id`.
-- `product_item`: catalog variants, partitioned by category with brand/product/variant clustering.
-- `customer_order_items_by_customer`: denormalized customer-to-order-to-product/variant lines, partitioned by `customer_id` for customer order-history queries.
-
-The service folders are logical modules, not separately deployed microservices yet. There is no event broker or synchronous service-to-service HTTP call in the current request path.
-
-## Project Structure
+## Repository layout
 
 ```
 backend_system/
-├── __init__.py                    # Package initialization
-├── main.py                        # FastAPI app and request orchestration
-├── cassandra_setup.py             # Keyspace and table initialization
-├── generate_data.py               # Synthetic orders/payments/catalog seed
-├── populate_customer_orders.py    # Demo customer/order/product links
-├── verify_cassandra.py            # Cassandra verification utility
-├── docker-compose.yml             # Local Cassandra container
-├── pyproject.toml                 # uv project and dependencies
-├── orders_service/                # Orders logical service module
+├── main.py                       # Legacy FastAPI app (payments keyspace)
+├── cassandra_setup.py            # Legacy keyspace/table bootstrap
+├── generate_data.py              # Legacy seed generator
+├── simulate.py                   # NEW: CLI entrypoint for the shop simulator
+├── shop/                         # NEW: commerce platform package
 │   ├── __init__.py
-│   ├── models.py                  # Order data models
-│   ├── repository.py              # Cassandra database operations
-│   └── service.py                 # Business logic and orchestration
-├── payments_service/              # Payments logical service module
-│   ├── __init__.py
-│   ├── models.py                  # Payment data models
-│   ├── repository.py              # Cassandra database operations
-│   └── service.py                 # Business logic and orchestration
+│   ├── config.py                 # sources, categories, discount + sim params
+│   ├── ids.py                    # deterministic id generators
+│   ├── schema.py                 # shop keyspace DDL + INSERT statements
+│   ├── catalog.py                # categories / products / variants
+│   ├── people.py                 # users, PII, addresses
+│   ├── traffic.py                # sessions, events, source attribution
+│   ├── cart.py                   # carts, cart items, lucky check
+│   ├── orders.py                 # orders, order items
+│   ├── payments.py               # payment attempts, refunds
+│   ├── dirty.py                  # data-quality issue injection + ledger
+│   ├── writer.py                 # Cassandra writer (dry-run aware)
+│   └── simulator.py              # day-level orchestration
+├── orders_service/               # Legacy logical service module
+├── payments_service/             # Legacy logical service module
+├── docker-compose.yml            # Local Cassandra container
+└── pyproject.toml                # uv project and dependencies
 ```
 
-## Services Overview
+---
 
-### Orders Service
-- **Purpose**: Order lifecycle management (create, update, status tracking)
-- **Key Features**:
-  - Order creation with validation
-  - Status management with transition validation
-  - Customer order history retrieval
-  - Order cancellation and refund processing
-  - Integration with Payments Service
+## Commerce Platform
 
-### Payments Service
-- **Purpose**: Payment processing and validation
-- **Key Features**:
-  - Payment creation with multiple payment methods
-  - Payment processing workflow (pending → processing → completed/failed)
-  - Payment retry, refund, and cancellation
-  - Gateway integration support
-  - Customer payment history retrieval
+### Entity model
 
-## Technology Stack
+```
+Category ─< Product ─< Variant (SKU)
+User ─< Session (source, anonymous_id) ─< Event
+User / anonymous ─< Cart ─< CartItem ─> Variant
+Session ── adopts ──> User          (identity stitch at login)
+Cart ── converts ──> Order ─< OrderItem ─> Variant  (price SNAPSHOT)
+Order ─< Payment                     (multiple attempts)
+User / anonymous ─< LuckyRoll        (once per day)
+```
 
-### Core Framework
-- **FastAPI**: Async API framework with automatic documentation
-- **Pydantic**: Data validation and serialization
-- **SQLAlchemy**: Database ORM (for future relational database support)
+Rules baked into the model:
 
-### Database
-- **Cassandra**: Primary database for orders and payments tables
-- **Async Driver**: Non-blocking Cassandra operations
+- **Source is per session** (`utm_source`, `utm_medium`, `utm_campaign`,
+  `referrer`, normalized `channel`).
+- **No guest checkout** - anonymous visitors can browse and add to carts, but
+  checkout requires login. Login is where `anonymous_id` is stitched to
+  `user_id` via `identity_map`.
+- **Money is `decimal` with an explicit `currency` column** everywhere.
+- **Order items snapshot prices** at purchase time; orders never join to live
+  catalog prices.
+- **Payments allow multiple attempts** per order (attempt 1 fails, attempt 2
+  succeeds, etc.).
+- **No inventory logic.**
+- **Lucky Check**: manual button on the cart, roll `1-1000`, win on
+  `{7,8,9,10}` (0.4%), discount **20%** frozen onto the cart. Once per user per
+  day, or per `anonymous_id` for guests. Roll value and discount are records,
+  not inline `random()` calls.
 
-### Infrastructure
-- **Docker Compose**: Service orchestration (to be implemented)
-- **RabbitMQ/Redis Streams**: Event streaming (to be implemented)
-- **Prometheus + Grafana**: Monitoring (to be implemented)
+### Keyspace and tables
 
-## Key Components
+Keyspace: `shop` (replication `SimpleStrategy`, `rf=1` for local).
 
-### Models
-- **Order**: Order data structure with status validation
-- **Payment**: Payment data structure with workflow management
-- Both models include comprehensive validation, business logic, and serialization
+**Identity & traffic**
 
-### Repositories
-- **OrdersRepository**: Cassandra operations for orders
-- **PaymentsRepository**: Cassandra operations for payments
-- Both provide CRUD operations with proper error handling
+| Table | Partition key | Clustering | Serves |
+|-------|---------------|------------|--------|
+| `users` | `user_id` | - | get user |
+| `users_by_email` | `email` | - | login lookup |
+| `user_addresses` | `user_id` | `address_id` | user's addresses (PII) |
+| `sessions` | `session_id` | - | get session |
+| `sessions_by_anonymous` | `anonymous_id` | `started_at`, `session_id` | a visitor's sessions |
+| `sessions_by_user` | `user_id` | `started_at`, `session_id` | a user's sessions |
+| `identity_map` | `anonymous_id` | - | anon -> user stitch |
+| `identity_map_by_user` | `user_id` | `anonymous_id` | devices per user |
+| `events` | `session_id` | `event_at`, `event_id` | raw funnel events |
 
-### Services
-- **OrdersService**: Business logic for order management
-- **PaymentsService**: Business logic for payment processing
-- Both orchestrate repository operations with validation
+**Catalog**
 
-### Main Application
-- **PaymentsOrdersSystem**: Main orchestrator class
-- **FastAPI Application**: REST API endpoints
-- **System Integration**: Database connections and service coordination
+| Table | Partition key | Clustering | Serves |
+|-------|---------------|------------|--------|
+| `categories` | `category_id` | - | list categories |
+| `products_by_category` | `category_id` | `product_id` | products in a category |
+| `variants_by_product` | `product_id` | `variant_id` | variants of a product |
+| `product_item_by_id` | `variant_id` | - | variant lookup |
 
-## Installation
+**Cart**
 
-### Prerequisites
-- Python 3.8+
-- pip
+| Table | Partition key | Clustering | Serves |
+|-------|---------------|------------|--------|
+| `carts` | `cart_id` | - | get cart |
+| `cart_by_session` | `session_id` | - | active cart for a session |
+| `cart_by_user` | `user_id` | `created_at`, `cart_id` | a user's carts |
+| `cart_items` | `cart_id` | `variant_id` | items in a cart |
 
-### Install Dependencies
+**Orders**
+
+| Table | Partition key | Clustering | Serves |
+|-------|---------------|------------|--------|
+| `orders` | `order_id` | - | get order |
+| `orders_by_user` | `user_id` | `created_at`, `order_id` | a user's orders |
+| `order_items` | `order_id` | `variant_id` | items in an order (frozen prices) |
+
+**Payments**
+
+| Table | Partition key | Clustering | Serves |
+|-------|---------------|------------|--------|
+| `payments` | `payment_id` | - | get payment |
+| `payments_by_order` | `order_id` | `attempt_no` | attempts for an order |
+
+**Simulation metadata**
+
+| Table | Partition key | Clustering | Serves |
+|-------|---------------|------------|--------|
+| `simulation_runs` | `run_id` | - | run params + actuals |
+| `injected_issues` | `run_id` | `issue_id` | ground-truth quality ledger |
+
+---
+
+## Synthetic Data Simulator
+
+Because nothing external calls the API, the simulator is run directly and
+generates day-level data from a handful of inputs.
+
+### Inputs (CLI flags)
+
+| Flag | Meaning | Default |
+|------|---------|---------|
+| `--days` | number of days to simulate | `30` |
+| `--users-per-day` | daily visitor range, `MIN-MAX` | `500-2000` |
+| `--conversion` | target sessions -> orders percent | `3.5` |
+| `--start-date` | first simulated day `YYYY-MM-DD` | today |
+| `--seed` | RNG seed for reproducibility | `42` |
+| `--host` / `--port` | Cassandra contact point | `127.0.0.1` / `9042` |
+| `--keyspace` | target keyspace | `shop` |
+| `--reset` | drop and recreate the keyspace first | off |
+| `--dirty` | quality profile (`realistic` only for now) | `realistic` |
+| `--dry-run` | generate in memory and print a summary, no DB writes | off |
+
+### Usage
+
 ```bash
-cd backend_system
-pip install -r requirements.txt
+# from backend_system/ with the project's 3.11 venv
+
+# 30 days, 500-2000 visitors/day, 3.5% conversion, reproducible
+python simulate.py --days 30 --users-per-day 500-2000 --conversion 3.5 --seed 42
+
+# fresh start (drops the shop keyspace) against local Cassandra
+python simulate.py --days 90 --users-per-day 1000-5000 --conversion 4 --reset
+
+# validate the generation logic without Cassandra
+python simulate.py --days 7 --users-per-day 200-400 --conversion 5 --dry-run
 ```
 
-## Running the Application
+### Day-level realism
 
-### Development Mode
-```bash
-cd backend_system
-python main.py
+- Volume inside `[MIN,MAX]` with a weekday/weekend curve, a mild growth trend
+  and daily noise - not uniform.
+- Intra-day distribution with business-hour peaks, a lunch dip and a
+  late-night tail.
+- New vs returning visitors: returning visitors reuse an `anonymous_id` across
+  days (cookie), producing multi-day journeys.
+- Source mix across organic / paid social / email / direct / referral /
+  affiliate, with channel-dependent conversion and device-dependent behaviour.
+
+### Funnel
+
+```
+visit -> session -> events (page/product views) -> add_to_cart -> cart
+      -> [lucky check ~0.4% win] -> checkout -> login/register (stitch)
+      -> order -> payment attempt(s) -> completed | failed | refunded
 ```
 
-### Using Uvicorn (Recommended)
+Sessions that do not convert become abandoned carts or pure browsing, which is
+what the data team analyses. The target `conversion` is reconciled per day so
+the aggregate sessions -> orders rate lands within a small tolerance of the
+requested percentage (actuals are recorded in `simulation_runs`).
+
+### Edge cases handled
+
+Power users with many orders (Pareto), cart abandonment at every stage,
+multiple carts/sessions per user, failed payments -> retries -> success or
+abandonment, refunds and cancellations, anonymous carts never stitched, login
+with no prior anonymous session, empty sessions, orphan carts, high-value
+outlier orders, tiny orders, duplicate checkout clicks, and multi-currency.
+
+### Intentional data-quality issues (`realistic`)
+
+Injected at configurable rates and recorded in `injected_issues` so the ledger
+doubles as a test oracle:
+
+| Category | Examples |
+|----------|----------|
+| Nulls | missing email / phone / address |
+| Format | mixed-case emails, trailing spaces, inconsistent country casing |
+| Referential | order references a removed variant |
+| Temporal | event after session end, duplicate timestamps |
+| Financial | `discounted_price > price`, negative quantity, rounding drift |
+| Duplication | duplicate payment attempt rows |
+| Identity | one email mapped to two users |
+| Enums | `Complete` vs `completed`, `usd` vs `USD` |
+| Stale | sessions without `ended_at`, idle carts |
+
+### Output
+
+Cassandra only (keyspace `shop`), plus a printed run summary. The run manifest
+is stored in `simulation_runs` and the injected-issue answer key in
+`injected_issues`; no files are written by default.
+
+---
+
+## Legacy Payments System (unchanged)
+
+The original FastAPI app and its services remain in the `payments` keyspace.
+See the sections below.
+
+### Running the legacy app
+
 ```bash
 cd backend_system
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-## API Endpoints
+Endpoints: `POST /orders`, `GET /orders/{id}`, `PUT /orders/{id}/status`,
+`POST /orders/{id}/cancel`, `POST /payments`, `GET /payments/{id}`,
+`POST /payments/{id}/process|complete|fail|refund`, `GET /system/stats`.
 
-### Orders API
-- `POST /orders` - Create a new order
-- `GET /orders/{order_id}` - Get order by ID
-- `PUT /orders/{order_id}/status` - Update order status
-- `POST /orders/{order_id}/cancel` - Cancel an order
+### Legacy infrastructure
 
-### Payments API
-- `POST /payments` - Create a new payment
-- `GET /payments/{payment_id}` - Get payment by ID
-- `POST /payments/{payment_id}/process` - Process a payment
-- `POST /payments/{payment_id}/complete` - Complete a payment
-- `POST /payments/{payment_id}/fail` - Fail a payment
-- `POST /payments/{payment_id}/refund` - Refund a payment
+- **Cassandra 5.0** via `docker-compose.yml` (container
+  `payments-orders-cassandra`).
+- RabbitMQ / Redis / Prometheus + Grafana are planned but not wired into the
+  runtime.
 
-### System API
-- `GET /system/stats` - Get system statistics
-- `GET /` - Root endpoint
+## Technology stack
 
-## Database Schema
-
-### Orders Table
-- **Partition Key**: `order_id`
-- **Clustering Key**: `created_at`
-- **Columns**: `customer_id`, `amount`, `currency`, `status`, `created_at`, `updated_at`, `payment_method`, `payment_id`, `metadata`
-
-### Payments Table
-- **Partition Key**: `payment_id`
-- **Clustering Key**: `created_at`
-- **Columns**: `order_id`, `customer_id`, `amount`, `currency`, `payment_method`, `status`, `created_at`, `processed_at`, `completed_at`, `failed_at`, `refunded_at`, `gateway_response`, `gateway_fee`, `transaction_reference`, `metadata`
-
-## Error Handling
-
-The system implements comprehensive error handling:
-
-1. **Validation Errors**: Input validation using Pydantic
-2. **Business Logic Errors**: Status transition validation
-3. **System Errors**: Database connection failures
-4. **External Service Errors**: Payment gateway failures
-
-All errors are returned with appropriate HTTP status codes and structured error messages.
+- **Python 3.11** (`uv` managed)
+- **FastAPI + Uvicorn + Pydantic v2**
+- **Cassandra 5.0** + `cassandra-driver`
+- **Docker Compose** for local Cassandra
+- **pytest / pytest-asyncio / httpx** for tests
+- `structlog`, `prometheus-client`, `passlib`, `python-jose` available for
+  later hardening
 
 ## Testing
 
-### Unit Tests
 ```bash
 pytest
 ```
 
-### Integration Tests
-```bash
-pytest tests/
-```
-
-## Configuration
-
-Configuration is managed through environment variables and configuration files:
-
-- Database connection settings
-- API server configuration
-- Payment gateway credentials
-- Logging levels
-
-## Future Enhancements
-
-1. **Docker Support**: Docker Compose for local development
-2. **Event Streaming**: RabbitMQ/Redis Streams for real-time updates
-3. **Monitoring**: Prometheus metrics and Grafana dashboards
-4. **Security**: JWT authentication and role-based access control
-5. **Caching**: Redis for performance optimization
-6. **Load Testing**: Data generation scripts for testing
-7. **CI/CD**: Automated testing and deployment pipelines
-
 ## License
 
-This project is part of the Payments Orders System implementation.
-
-## Contact
-
-For questions or support, refer to the main project documentation in the parent directory.
+Part of the Payments Orders System learning project.
