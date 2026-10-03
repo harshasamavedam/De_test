@@ -178,8 +178,8 @@ generates day-level data from a handful of inputs.
 
 ### Running your first simulation
 
-Follow these steps in order. If you are brand new, do the dry run first - it
-needs no database and proves your setup works.
+Follow these steps in order. If you are brand new, do the optional dry run in
+Step 1b first - it needs no database and proves the generation logic works.
 
 **Step 0 - Prerequisites**
 
@@ -196,6 +196,15 @@ docker exec shop-cassandra nodetool status    # wait until the node shows "UN"
 
 `UN` means "Up / Normal". The first start can take ~40 seconds. Do not run the
 simulator before you see `UN`, or it will fail to connect.
+
+**Step 1b (optional) - Dry run without Cassandra**
+
+```bash
+uv run python simulate.py --days 2 --users-per-day 200-400 --conversion 5 --dry-run
+```
+
+Generates in memory and prints a summary; writes nothing. Confirms the code is
+wired up before you involve the database.
 
 **Step 2 - Create the schema and generate data**
 
@@ -222,7 +231,7 @@ At the end you will see something like:
   "orders": 218,
   "converting_sessions": 218,
   "target_conversion_pct": 1.7,
-  "actual_conversion_pct": 1.728,
+  "actual_conversion_pct": 1.73,
   "injected_issues": 773,
   "row_counts": { "sessions": 12598, "orders": 218, "...": "..." }
 }
