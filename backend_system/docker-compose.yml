@@ -3,11 +3,11 @@ version: "3.9"
 services:
   cassandra:
     image: cassandra:5.0
-    container_name: payments-orders-cassandra
+    container_name: shop-cassandra
     ports:
       - "9042:9042"
     environment:
-      CASSANDRA_CLUSTER_NAME: payments-cluster
+      CASSANDRA_CLUSTER_NAME: shop-cluster
       CASSANDRA_DC: dc1
       CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
     volumes:

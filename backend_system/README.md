@@ -1,22 +1,17 @@
-# Payments Orders System - Backend & Commerce Simulator
+# Shop Commerce Platform & Synthetic Data Simulator
 
 ## Overview
 
-This directory contains the backend for a small e-commerce platform and the
-synthetic data simulator that feeds it.
+This directory contains the backend for a small e-commerce platform: a
+query-first Cassandra model, a day-level synthetic data simulator that feeds
+it, a FastAPI layer for the domain, and a small read-only query UI for
+exploring the data. There is no legacy system; the `payments` keyspace has been
+retired in favour of `shop`.
 
-There are two coexisting parts:
-
-1. **Legacy payments system** (`orders_service/`, `payments_service/`,
-   `main.py`) - the original FastAPI + Cassandra service. It stays in the
-   `payments` keyspace and is left as-is.
-2. **Commerce platform + simulator** (`shop/`, `simulate.py`) - the new,
-   query-first Cassandra model for users, traffic, carts, orders, payments and
-   a day-level synthetic data engine with realistic, intentionally dirty data.
-
-The simulator is the main deliverable: APIs are a reference surface, but the
-day-to-day work is running the simulator to generate near real-world data and
-its ground-truth quality manifest for the data team.
+The simulator is the main deliverable: the API and UI are reference surfaces,
+while the day-to-day work is running the simulator to generate near real-world
+data (with realistic quality issues) and its ground-truth manifest for the data
+team.
 
 ---
 
@@ -24,11 +19,8 @@ its ground-truth quality manifest for the data team.
 
 ```
 backend_system/
-├── main.py                       # Legacy FastAPI app (payments keyspace)
-├── cassandra_setup.py            # Legacy keyspace/table bootstrap
-├── generate_data.py              # Legacy seed generator
-├── simulate.py                   # NEW: CLI entrypoint for the shop simulator
-├── shop/                         # NEW: commerce platform package
+├── simulate.py                   # CLI entrypoint for the shop simulator
+├── shop/                         # commerce platform package
 │   ├── __init__.py
 │   ├── config.py                 # sources, categories, discount + sim params
 │   ├── ids.py                    # deterministic id generators
@@ -46,10 +38,11 @@ backend_system/
 │   ├── service.py                # API business logic
 │   ├── api_models.py             # Pydantic request/response schemas
 │   ├── routes.py                 # FastAPI routes
+│   ├── query.py                  # read-only CQL runner for the UI
+│   ├── ui.py                     # interactive query UI (/ui)
 │   ├── api.py                    # FastAPI app factory
 │   └── simulator.py              # day-level orchestration
-├── orders_service/               # Legacy logical service module
-├── payments_service/             # Legacy logical service module
+├── tests/                        # pytest suite
 ├── docker-compose.yml            # Local Cassandra container
 └── pyproject.toml                # uv project and dependencies
 ```
@@ -293,35 +286,32 @@ the cart's frozen Lucky Check discount carries into the order.
 
 ---
 
-## Legacy Payments System (unchanged)
+## Data explorer UI
 
-The original FastAPI app and its services remain in the `payments` keyspace.
-See the sections below.
+A small read-only CQL console for understanding the shape of the data. Served
+by the same FastAPI app.
 
-### Running the legacy app
-
-```bash
-cd backend_system
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+http://localhost:8100/ui
 ```
 
-Endpoints: `POST /orders`, `GET /orders/{id}`, `PUT /orders/{id}/status`,
-`POST /orders/{id}/cancel`, `POST /payments`, `GET /payments/{id}`,
-`POST /payments/{id}/process|complete|fail|refund`, `GET /system/stats`.
+- Query box with preset buttons (tables, categories, sessions, carts, orders,
+  payments, lucky rolls, injected issues, simulation runs).
+- **Read-only**: only single `SELECT` statements are accepted; anything
+  containing `INSERT/UPDATE/DELETE/DROP/CREATE/...` is rejected.
+- Results render as a table, capped at 200 rows, with a 10s query timeout.
 
-### Legacy infrastructure
+> Cassandra uses CQL, not SQL - there are no joins or subqueries. This is a
+> guided explorer, not a general database console.
 
-- **Cassandra 5.0** via `docker-compose.yml` (container
-  `payments-orders-cassandra`).
-- RabbitMQ / Redis / Prometheus + Grafana are planned but not wired into the
-  runtime.
+---
 
 ## Technology stack
 
 - **Python 3.11** (`uv` managed)
 - **FastAPI + Uvicorn + Pydantic v2**
 - **Cassandra 5.0** + `cassandra-driver`
-- **Docker Compose** for local Cassandra
+- **Docker Compose** for local Cassandra (container `shop-cassandra`)
 - **pytest / pytest-asyncio / httpx** for tests
 - `structlog`, `prometheus-client`, `passlib`, `python-jose` available for
   later hardening
@@ -333,7 +323,8 @@ pytest
 ```
 
 `tests/test_simulator.py` runs without Cassandra (dry-run generator tests).
-`tests/test_api.py` is an integration suite that uses a dedicated `shop_test`
+`tests/test_query.py` covers the read-only query guard. `tests/test_api.py` is
+an integration suite that uses a dedicated `shop_test`
 keyspace on `127.0.0.1:9042`; it is skipped automatically when Cassandra is
 unreachable.
 

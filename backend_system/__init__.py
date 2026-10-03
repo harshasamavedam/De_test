@@ -1,8 +1,5 @@
-"""
-Backend System - Core microservices architecture for Payments Orders System
-"""
+"""Shop commerce platform.
 
-from orders_service import OrdersService, OrdersRepository
-from payments_service import PaymentsService, PaymentsRepository
-
-__all__ = ["OrdersService", "OrdersRepository", "PaymentsService", "PaymentsRepository"]
+Query-first Cassandra model plus a day-level synthetic data simulator and a
+FastAPI layer for exploring the data.
+"""

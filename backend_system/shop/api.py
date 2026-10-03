@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .repository import ShopRepository
 from .routes import router
 from .service import ShopService
+from .ui import router as ui_router
 
 
 def create_app(host: str | None = None, port: int | None = None,
@@ -40,10 +41,11 @@ def create_app(host: str | None = None, port: int | None = None,
     app.state.shop_service = ShopService(repository)
 
     app.include_router(router)
+    app.include_router(ui_router)
 
     @app.get("/", tags=["meta"])
     def root():
-        return {"service": "shop", "status": "running", "keyspace": keyspace}
+        return {"service": "shop", "status": "running", "keyspace": keyspace, "ui": "/ui"}
 
     @app.on_event("shutdown")
     def shutdown():

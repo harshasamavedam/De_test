@@ -1,7 +1,7 @@
 [project]
-name = "payments-orders-system"
+name = "shop-commerce-platform"
 version = "0.1.0"
-description = "Payments Orders System with microservices architecture, automatic data generation, and Cassandra storage"
+description = "Shop commerce platform with a query-first Cassandra model, synthetic data simulator and query API"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
