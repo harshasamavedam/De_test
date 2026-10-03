@@ -32,6 +32,7 @@ backend_system/
 │   ├── __init__.py
 │   ├── config.py                 # sources, categories, discount + sim params
 │   ├── ids.py                    # deterministic id generators
+│   ├── id_factory.py             # runtime ids for API-created entities
 │   ├── schema.py                 # shop keyspace DDL + INSERT statements
 │   ├── catalog.py                # categories / products / variants
 │   ├── people.py                 # users, PII, addresses
@@ -41,6 +42,11 @@ backend_system/
 │   ├── payments.py               # payment attempts, refunds
 │   ├── dirty.py                  # data-quality issue injection + ledger
 │   ├── writer.py                 # Cassandra writer (dry-run aware)
+│   ├── repository.py             # read/update queries for the API
+│   ├── service.py                # API business logic
+│   ├── api_models.py             # Pydantic request/response schemas
+│   ├── routes.py                 # FastAPI routes
+│   ├── api.py                    # FastAPI app factory
 │   └── simulator.py              # day-level orchestration
 ├── orders_service/               # Legacy logical service module
 ├── payments_service/             # Legacy logical service module
@@ -234,6 +240,59 @@ is stored in `simulation_runs` and the injected-issue answer key in
 
 ---
 
+## Shop API
+
+A FastAPI app over the `shop` keyspace for exercising the same domain rules
+live. It is a reference/demo surface; the simulator remains the primary tool.
+
+### Running
+
+```bash
+cd backend_system
+uvicorn shop.api:app --host 0.0.0.0 --port 8100 --reload
+```
+
+Interactive docs at `http://localhost:8100/docs`. Env overrides:
+`SHOP_CASSANDRA_HOST`, `SHOP_CASSANDRA_PORT`, `SHOP_KEYSPACE`.
+
+### Endpoints (`/api/v1`)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/sessions` | start a session (guest or with `anonymous_id`) |
+| GET | `/sessions/{id}` | fetch a session |
+| POST | `/sessions/{id}/login` | log in/register, stitch `anonymous_id -> user_id` |
+| GET | `/sessions/{id}/events` | session event stream |
+| GET | `/categories` | list categories |
+| GET | `/categories/{id}/products` | products in a category |
+| GET | `/products/{id}/variants` | variants of a product |
+| GET | `/variants/{id}` | variant by id |
+| POST | `/carts` | create the session's active cart |
+| GET | `/carts/{id}` | cart with items |
+| POST | `/carts/{id}/items` | add a variant |
+| DELETE | `/carts/{id}/items/{variant_id}` | remove a variant |
+| POST | `/carts/{id}/lucky-check` | roll once/day; win = 20% off frozen to cart |
+| POST | `/orders` | convert the cart (login required; 401 for guests) |
+| GET | `/orders/{id}` | order with frozen item prices |
+| GET | `/users/{id}/orders` | a user's orders |
+| POST | `/payments` | create a payment attempt for an order |
+| GET | `/payments/{id}` | payment by id |
+| POST | `/payments/{id}/process\|complete\|fail\|refund` | payment lifecycle |
+
+### Checkout flow
+
+```
+guest session -> cart -> add items -> [lucky-check]
+  -> checkout -> login/register (stitch) -> POST /orders -> POST /payments
+  -> process/complete -> order marked completed (or fail/refund)
+```
+
+Guests can browse and build carts but checkout returns **401** until they log
+in; login adopts the session's cart. Order items snapshot the price paid, and
+the cart's frozen Lucky Check discount carries into the order.
+
+---
+
 ## Legacy Payments System (unchanged)
 
 The original FastAPI app and its services remain in the `payments` keyspace.
@@ -272,6 +331,11 @@ Endpoints: `POST /orders`, `GET /orders/{id}`, `PUT /orders/{id}/status`,
 ```bash
 pytest
 ```
+
+`tests/test_simulator.py` runs without Cassandra (dry-run generator tests).
+`tests/test_api.py` is an integration suite that uses a dedicated `shop_test`
+keyspace on `127.0.0.1:9042`; it is skipped automatically when Cassandra is
+unreachable.
 
 ## License
 
