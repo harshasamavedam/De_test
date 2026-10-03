@@ -7,11 +7,19 @@ can be validated without a running Cassandra.
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, deque
 
 from cassandra.cluster import Cluster
 
 from . import schema
+
+# How many writes may be in flight before we start waiting on responses.
+# Higher = more pipelining (faster) at the cost of memory; 1024 is a safe
+# default for a single local node.
+DEFAULT_MAX_INFLIGHT = 1024
+# Cassandra client request timeout. The previous 10s default intermittently
+# tripped on DDL (DROP/CREATE KEYSPACE) on a busy node.
+DEFAULT_REQUEST_TIMEOUT = 30.0
 
 # Column order for every prepared INSERT (must match shop/schema.INSERTS).
 ROW_ORDER = {
@@ -88,15 +96,19 @@ ROW_ORDER = {
 class Writer:
     """Buffers entity dicts and writes positional rows to Cassandra."""
 
-    def __init__(self, host: str, port: int, keyspace: str, dry_run: bool = False):
+    def __init__(self, host: str, port: int, keyspace: str, dry_run: bool = False,
+                 max_inflight: int = DEFAULT_MAX_INFLIGHT):
         self.host = host
         self.port = port
         self.keyspace = keyspace
         self.dry_run = dry_run
+        self.max_inflight = max(max_inflight, 1)
         self.cluster = None
         self.session = None
         self.statements = {}
         self.counts: Counter = Counter()
+        # Futures whose responses we have not waited on yet.
+        self._inflight: deque = deque()
 
     # -- lifecycle ---------------------------------------------------------
     def connect(self, reset: bool = False) -> None:
@@ -104,6 +116,7 @@ class Writer:
             return
         self.cluster = Cluster([self.host], port=self.port)
         self.session = self.cluster.connect()
+        self.session.default_timeout = DEFAULT_REQUEST_TIMEOUT
         if reset:
             schema.drop_keyspace(self.session, self.keyspace)
         schema.create_schema(self.session, self.keyspace)
@@ -112,17 +125,29 @@ class Writer:
             self.statements[table] = self.session.prepare(cql)
 
     def close(self) -> None:
+        self.flush()
         if self.cluster:
             self.cluster.shutdown()
 
     # -- writes ------------------------------------------------------------
+    def _dispatch(self, table: str, params: list) -> None:
+        """Send one write async, draining the oldest response when full."""
+        future = self.session.execute_async(self.statements[table], params)
+        self._inflight.append(future)
+        if len(self._inflight) >= self.max_inflight:
+            self._inflight.popleft().result()  # raises on write failure
+
+    def flush(self) -> None:
+        """Wait for every in-flight write to complete."""
+        while self._inflight:
+            self._inflight.popleft().result()
+
     def write(self, table: str, entity: dict) -> None:
         self.counts[table] += 1
         if self.dry_run:
             return
         order = ROW_ORDER[table]
-        statement = self.statements[table]
-        self.session.execute(statement, [entity.get(col) for col in order])
+        self._dispatch(table, [entity.get(col) for col in order])
 
     def write_many(self, table: str, entities: list[dict]) -> None:
         for entity in entities:
@@ -134,7 +159,7 @@ class Writer:
             self.counts[table] += 1
             if self.dry_run:
                 continue
-            self.session.execute(self.statements[table], list(row))
+            self._dispatch(table, list(row))
 
     def as_row_counts(self) -> dict:
         return dict(self.counts)

@@ -31,6 +31,7 @@ class ShopRepository:
         self.cluster = Cluster([self.host], port=self.port)
         self.session = self.cluster.connect(self.keyspace)
         self.session.row_factory = dict_factory
+        self.session.default_timeout = 30.0
         for table, cql in schema.INSERTS.items():
             self._inserts[table] = self.session.prepare(cql)
         for name, cql in UPDATES.items():
