@@ -15,6 +15,36 @@ team.
 
 ---
 
+## Quick start
+
+Prerequisites: Docker, `uv` (or Python 3.11), and the project's `.venv`.
+
+```bash
+# 1. Start the local Cassandra node
+cd backend_system
+docker compose up -d
+
+# 2. Install dependencies into the project venv (uv-managed, no pip)
+uv sync
+
+# 3. Generate 7 days of data (fresh keyspace)
+uv run python simulate.py \
+  --days 7 --start-date 2026-07-09 \
+  --users-per-day 1500-2000 --conversion 1.7 \
+  --seed 42 --reset
+
+# 4. Explore the data in the browser
+uv run uvicorn shop.api:app --host 0.0.0.0 --port 8100
+# API docs:   http://localhost:8100/docs
+# Data:       http://localhost:8100/ui
+```
+
+That produces ~12.6k sessions and ~218 orders (1.7% conversion) in
+**under two minutes**. See [Performance](#performance) for why it is fast and
+how to tune it.
+
+---
+
 ## Repository layout
 
 ```
@@ -146,6 +176,83 @@ Keyspace: `shop` (replication `SimpleStrategy`, `rf=1` for local).
 Because nothing external calls the API, the simulator is run directly and
 generates day-level data from a handful of inputs.
 
+### Running your first simulation
+
+Follow these steps in order. If you are brand new, do the dry run first - it
+needs no database and proves your setup works.
+
+**Step 0 - Prerequisites**
+
+- Docker Desktop (for Cassandra), `uv`, and a terminal in `backend_system/`.
+- Add `uv run` before `python` if you have not activated the project venv.
+
+**Step 1 - Start Cassandra and wait for it to be ready**
+
+```bash
+cd backend_system
+docker compose up -d
+docker exec shop-cassandra nodetool status    # wait until the node shows "UN"
+```
+
+`UN` means "Up / Normal". The first start can take ~40 seconds. Do not run the
+simulator before you see `UN`, or it will fail to connect.
+
+**Step 2 - Create the schema and generate data**
+
+```bash
+uv run python simulate.py \
+  --days 7 \
+  --start-date 2026-07-09 \
+  --users-per-day 1500-2000 \
+  --conversion 1.7 \
+  --reset
+```
+
+- `--reset` drops and recreates the `shop` keyspace, so every run starts clean.
+- The command prints a JSON summary when it finishes.
+
+**Step 3 - Read the summary**
+
+At the end you will see something like:
+
+```json
+{
+  "run_id": "run_20260709_7d_seed42",
+  "sessions": 12598,
+  "orders": 218,
+  "converting_sessions": 218,
+  "target_conversion_pct": 1.7,
+  "actual_conversion_pct": 1.728,
+  "injected_issues": 773,
+  "row_counts": { "sessions": 12598, "orders": 218, "...": "..." }
+}
+```
+
+`actual_conversion_pct` should be close to your `--conversion` target.
+
+**Step 4 - Look at the data**
+
+```bash
+uv run uvicorn shop.api:app --host 0.0.0.0 --port 8100
+```
+
+Open <http://localhost:8100/ui>, click a preset (for example **Orders**), and
+run it to see rows in a table.
+
+**Step 5 - Re-run and vary it**
+
+- Same `--seed` reproduces the exact same dataset.
+- Change `--days`, `--users-per-day`, `--conversion` or `--seed` for a new one.
+
+**Troubleshooting**
+
+| Symptom | Cause / fix |
+|---------|-------------|
+| `NoHostAvailable` / connection refused | Cassandra not up yet - wait for `UN` in step 1 |
+| `OperationTimedOut` on `DROP KEYSPACE` | Retry; a busy node can be slow to return. Add `--max-inflight 128` if it persists |
+| Run seems slow | Lower `--days`, or raise `--max-inflight`. See [Performance](#performance) |
+| Want to test without Cassandra | Add `--dry-run` to any command |
+
 ### Inputs (CLI flags)
 
 | Flag | Meaning | Default |
@@ -160,6 +267,7 @@ generates day-level data from a handful of inputs.
 | `--reset` | drop and recreate the keyspace first | off |
 | `--dirty` | quality profile (`realistic` only for now) | `realistic` |
 | `--dry-run` | generate in memory and print a summary, no DB writes | off |
+| `--max-inflight` | max concurrent in-flight writes (throughput vs memory) | `1024` |
 
 ### Usage
 
@@ -174,7 +282,42 @@ python simulate.py --days 90 --users-per-day 1000-5000 --conversion 4 --reset
 
 # validate the generation logic without Cassandra
 python simulate.py --days 7 --users-per-day 200-400 --conversion 5 --dry-run
+
+# low-memory / gentle on a small node
+python simulate.py --days 7 --users-per-day 1500-2000 --conversion 1.7 --max-inflight 128
 ```
+
+### What it writes
+
+A run populates the `shop` keyspace (see [Tables](#keyspace-and-tables)) and
+records two provenance tables you can query afterwards:
+
+- `simulation_runs` - the run parameters and actuals (sessions, orders,
+  conversion). Query it to confirm what a dataset represents.
+- `injected_issues` - the ground-truth ledger of every quality defect planted,
+  with the affected table, column and value. Use it as a scoring key for
+  cleaning jobs.
+
+### Performance
+
+The writer dispatches each insert with `execute_async` and keeps a bounded
+window of in-flight writes (default `1024`), draining the oldest when the
+window is full and flushing the rest on shutdown. This overlaps network
+round-trips instead of paying one per row.
+
+| Setting | Throughput | 7-day run |
+|---------|-----------|-----------|
+| synchronous (old) | ~5.6 sessions/sec | ~35 min |
+| async, `--max-inflight 1024` (default) | ~69 sessions/sec | ~70 sec |
+
+Tuning:
+
+- **Faster:** raise `--max-inflight` (e.g. `2048`). Diminishing returns beyond
+  what the node can absorb.
+- **Gentler / lower memory:** lower it (e.g. `--max-inflight 128`) - useful on
+  small nodes or when a `DROP KEYSPACE` timeout suggests the node is saturated.
+- Writes are **not transactional**: a crash mid-run can leave partial data,
+  which is fine for synthetic seeding. Re-run with `--reset` for a clean slate.
 
 ### Day-level realism
 
