@@ -7,7 +7,7 @@ services:
     ports:
       - "9042:9042"
     environment:
-      CASSANDRA_CLUSTER_NAME: shop-cluster
+      CASSANDRA_CLUSTER_NAME: payments-cluster  # must match saved data in cassandra_data volume
       CASSANDRA_DC: dc1
       CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
     volumes:
