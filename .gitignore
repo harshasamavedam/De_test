@@ -32,3 +32,6 @@ ENV/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Generated data artifacts (regenerable via shop/export.py)
+*.parquet
