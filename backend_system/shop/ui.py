@@ -1,4 +1,4 @@
-"""Interactive query UI: a small read-only CQL console for the shop keyspace.
+"""Interactive query UI: a small read-only SQL console for the shop database.
 
 Serves a single self-contained HTML page at `/ui` plus the JSON endpoints it
 calls. No build step and no extra dependencies beyond FastAPI.
@@ -17,7 +17,7 @@ router = APIRouter()
 
 
 class QueryRequest(BaseModel):
-    cql: str
+    sql: str
 
 
 def get_service(request: Request) -> ShopService:
@@ -32,7 +32,7 @@ def presets():
 @router.post("/api/v1/query", tags=["explore"])
 def run_query(payload: QueryRequest, service: ShopService = Depends(get_service)):
     try:
-        return query.run(service.repo, payload.cql)
+        return query.run(service.repo, payload.sql)
     except query.QueryError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
@@ -80,7 +80,7 @@ PAGE = """<!doctype html>
 <body>
 <header>
   <h1>Shop data explorer</h1>
-  <span class="muted">read-only CQL &middot; keyspace <b>shop</b></span>
+  <span class="muted">read-only SQL &middot; database <b>shop</b></span>
 </header>
 <div class="wrap">
   <div>
@@ -88,7 +88,7 @@ PAGE = """<!doctype html>
     <div class="presets" id="presets"></div>
   </div>
   <div>
-    <textarea id="cql" spellcheck="false">SELECT * FROM orders LIMIT 25</textarea>
+    <textarea id="sql" spellcheck="false">SELECT * FROM orders LIMIT 25</textarea>
     <div class="row" style="margin-top:8px">
       <button class="primary" id="run">Run query</button>
       <span class="status" id="status"></span>
@@ -106,18 +106,18 @@ async function loadPresets() {
   data.presets.forEach(p => {
     const b = document.createElement('button');
     b.textContent = p.label;
-    b.onclick = () => { $('cql').value = p.cql; run(); };
+    b.onclick = () => { $('sql').value = p.sql; run(); };
     box.appendChild(b);
   });
 }
 async function run() {
-  const cql = $('cql').value.trim();
+  const sql = $('sql').value.trim();
   $('status').className = 'status';
   $('status').textContent = 'running...';
   try {
     const res = await fetch('/api/v1/query', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({cql})
+      body: JSON.stringify({sql})
     });
     const data = await res.json();
     if (!res.ok) {
@@ -153,7 +153,7 @@ function esc(v) {
   return String(v).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
 }
 $('run').onclick = run;
-$('cql').addEventListener('keydown', e => { if ((e.ctrlKey||e.metaKey) && e.key === 'Enter') run(); });
+$('sql').addEventListener('keydown', e => { if ((e.ctrlKey||e.metaKey) && e.key === 'Enter') run(); });
 loadPresets();
 </script>
 </body>

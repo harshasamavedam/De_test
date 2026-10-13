@@ -5,10 +5,10 @@ Examples
     # 30 days, 500-2000 visitors/day, 3.5% conversion, reproducible
     python simulate.py --days 30 --users-per-day 500-2000 --conversion 3.5 --seed 42
 
-    # fresh start (drops the shop keyspace) against local Cassandra
+    # fresh start (drops and recreates all tables) against local Postgres
     python simulate.py --days 90 --users-per-day 1000-5000 --conversion 4 --reset
 
-    # validate generation logic without Cassandra
+    # validate generation logic without Postgres
     python simulate.py --days 7 --users-per-day 200-400 --conversion 5 --dry-run
 """
 
@@ -59,12 +59,14 @@ def parse_args(argv=None):
     parser.add_argument("--seed", type=int, default=config.DEFAULT_SEED,
                         help="RNG seed for reproducibility (default: %(default)s)")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=9042)
-    parser.add_argument("--keyspace", default=config.DEFAULT_KEYSPACE)
+    parser.add_argument("--port", type=int, default=5432)
+    parser.add_argument("--dbname", default=config.DEFAULT_DBNAME)
+    parser.add_argument("--user", default="shop")
+    parser.add_argument("--password", default="shop")
     parser.add_argument("--dirty", default=config.DEFAULT_DIRTY_PROFILE,
                         choices=("clean", "realistic"))
     parser.add_argument("--reset", action="store_true",
-                        help="drop and recreate the keyspace first")
+                        help="drop and recreate all tables first")
     parser.add_argument("--dry-run", action="store_true",
                         help="generate in memory and print a summary, no DB writes")
     parser.add_argument("--max-inflight", type=int, default=DEFAULT_MAX_INFLIGHT,
@@ -85,18 +87,19 @@ def main(argv=None) -> int:
         conversion=args.conversion,
         start_date=args.start_date,
         seed=args.seed,
-        keyspace=args.keyspace,
+        dbname=args.dbname,
         dirty=args.dirty,
     )
-    writer = Writer(args.host, args.port, args.keyspace, dry_run=args.dry_run,
-                    max_inflight=args.max_inflight)
+    writer = Writer(args.host, args.port, args.dbname, dry_run=args.dry_run,
+                    max_inflight=args.max_inflight, user=args.user,
+                    password=args.password)
     simulator = Simulator(params, writer)
     summary = simulator.run(reset=args.reset)
 
     print(json.dumps(summary, indent=2, default=str))
     if not args.dry_run:
-        print("\nWrote data to Cassandra keyspace "
-              f"'{args.keyspace}' at {args.host}:{args.port}.")
+        print("\nWrote data to Postgres database "
+              f"'{args.dbname}' at {args.host}:{args.port}.")
     else:
         print("\nDry run complete; no data was written.")
     return 0

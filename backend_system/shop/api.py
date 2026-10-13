@@ -18,14 +18,17 @@ from .ui import router as ui_router
 
 
 def create_app(host: str | None = None, port: int | None = None,
-               keyspace: str | None = None) -> FastAPI:
-    host = host or os.getenv("SHOP_CASSANDRA_HOST", "127.0.0.1")
-    port = port or int(os.getenv("SHOP_CASSANDRA_PORT", "9042"))
-    keyspace = keyspace or os.getenv("SHOP_KEYSPACE", "shop")
+               dbname: str | None = None, user: str | None = None,
+               password: str | None = None) -> FastAPI:
+    host = host or os.getenv("SHOP_PG_HOST", "127.0.0.1")
+    port = port or int(os.getenv("SHOP_PG_PORT", "5432"))
+    dbname = dbname or os.getenv("SHOP_PG_DB", "shop")
+    user = user or os.getenv("SHOP_PG_USER", "shop")
+    password = password or os.getenv("SHOP_PG_PASSWORD", "shop")
 
     app = FastAPI(
         title="Shop Commerce Platform API",
-        description="Traffic, cart, orders and payments on the shop keyspace.",
+        description="Traffic, cart, orders and payments on the shop database.",
         version="1.0.0",
     )
     app.add_middleware(
@@ -35,7 +38,8 @@ def create_app(host: str | None = None, port: int | None = None,
         allow_headers=["*"],
     )
 
-    repository = ShopRepository(host=host, port=port, keyspace=keyspace)
+    repository = ShopRepository(host=host, port=port, dbname=dbname,
+                              user=user, password=password)
     repository.connect()
     app.state.shop_repository = repository
     app.state.shop_service = ShopService(repository)
@@ -45,7 +49,7 @@ def create_app(host: str | None = None, port: int | None = None,
 
     @app.get("/", tags=["meta"])
     def root():
-        return {"service": "shop", "status": "running", "keyspace": keyspace, "ui": "/ui"}
+        return {"service": "shop", "status": "running", "database": dbname, "ui": "/ui"}
 
     @app.on_event("shutdown")
     def shutdown():

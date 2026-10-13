@@ -1,4 +1,4 @@
-"""Unit tests for the shop simulator (no Cassandra required)."""
+"""Unit tests for the shop simulator (no database required)."""
 
 from __future__ import annotations
 

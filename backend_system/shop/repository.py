@@ -1,63 +1,74 @@
-"""Cassandra repository for the shop API.
+"""Postgres repository for the shop API.
 
-Reuses the prepared INSERT statements and column ordering from
-`shop.writer`, and adds the read/update queries the API needs. Every query is
-partition-key based to stay in line with the query-first model.
+Reuses the column ordering from `shop.writer`, and adds the read/update
+queries the API needs. Same method surface as the old Cassandra repository,
+so `shop.service` is untouched.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from cassandra.cluster import Cluster
-from cassandra.query import dict_factory
+import psycopg
+from psycopg.rows import dict_row
 
-from . import schema
+from . import pg_schema
 from .writer import ROW_ORDER
 
 
 class ShopRepository:
-    def __init__(self, host: str = "127.0.0.1", port: int = 9042, keyspace: str = "shop"):
+    def __init__(self, host: str = "127.0.0.1", port: int = 5432,
+                 dbname: str = "shop", user: str = "shop",
+                 password: str = "shop"):
         self.host = host
         self.port = port
-        self.keyspace = keyspace
-        self.cluster = None
-        self.session = None
-        self._inserts: dict[str, Any] = {}
-        self._updates: dict[str, Any] = {}
+        self.dbname = dbname
+        self.user = user
+        self.password = password
+        self.conn = None
 
     # -- lifecycle ---------------------------------------------------------
     def connect(self) -> None:
-        self.cluster = Cluster([self.host], port=self.port)
-        self.session = self.cluster.connect(self.keyspace)
-        self.session.row_factory = dict_factory
-        self.session.default_timeout = 30.0
-        for table, cql in schema.INSERTS.items():
-            self._inserts[table] = self.session.prepare(cql)
-        for name, cql in UPDATES.items():
-            self._updates[name] = self.session.prepare(cql)
+        self.conn = psycopg.connect(
+            host=self.host, port=self.port, dbname=self.dbname,
+            user=self.user, password=self.password,
+            connect_timeout=10, autocommit=True,
+            row_factory=dict_row,
+            # Keep the exploration UI's ad-hoc queries bounded.
+            options="-c statement_timeout=10000",
+        )
 
     def close(self) -> None:
-        if self.cluster:
-            self.cluster.shutdown()
+        if self.conn:
+            self.conn.close()
+            self.conn = None
 
     # -- generic -----------------------------------------------------------
     def insert(self, table: str, entity: dict) -> None:
         order = ROW_ORDER[table]
-        self.session.execute(self._inserts[table], [entity.get(col) for col in order])
+        with self.conn.cursor() as cur:
+            cur.execute(
+                pg_schema.insert_sql(table, order),
+                pg_schema.adapt_row([entity.get(col) for col in order]),
+            )
 
     def insert_many(self, table: str, entities: list[dict]) -> None:
         for entity in entities:
             self.insert(table, entity)
 
     def update(self, name: str, values: list) -> None:
-        self.session.execute(self._updates[name], values)
+        with self.conn.cursor() as cur:
+            cur.execute(UPDATES[name], values)
 
-    def one(self, cql: str, params: tuple = ()) -> dict | None:
-        return self.session.execute(cql, params).one()
+    def one(self, sql: str, params: tuple = ()) -> dict | None:
+        with self.conn.cursor() as cur:
+            cur.execute(sql, params)
+            return cur.fetchone()
 
-    def many(self, cql: str, params: tuple = ()) -> list[dict]:
-        return list(self.session.execute(cql, params))
+    def many(self, sql: str, params: tuple = ()) -> list[dict]:
+        with self.conn.cursor() as cur:
+            cur.execute(sql, params)
+            return list(cur.fetchall())
 
     # -- users -------------------------------------------------------------
     def get_user(self, user_id: str) -> dict | None:
@@ -125,10 +136,11 @@ class ShopRepository:
         return self.many("SELECT * FROM cart_items WHERE cart_id = %s", (cart_id,))
 
     def delete_cart_item(self, cart_id: str, variant_id: str) -> None:
-        self.session.execute(
-            "DELETE FROM cart_items WHERE cart_id = %s AND variant_id = %s",
-            (cart_id, variant_id),
-        )
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM cart_items WHERE cart_id = %s AND variant_id = %s",
+                (cart_id, variant_id),
+            )
 
     def get_carts_by_user(self, user_id: str) -> list[dict]:
         return self.many("SELECT * FROM cart_by_user WHERE user_id = %s", (user_id,))
@@ -163,28 +175,28 @@ class ShopRepository:
 
 UPDATES = {
     "cart_status": """
-        UPDATE carts SET status = ?, item_count = ?, subtotal = ?,
-            discount_pct = ?, discount_amount = ?, total = ?,
-            lucky_roll_id = ?, converted_order_id = ?, updated_at = ?
-        WHERE cart_id = ?
+        UPDATE carts SET status = %s, item_count = %s, subtotal = %s,
+            discount_pct = %s, discount_amount = %s, total = %s,
+            lucky_roll_id = %s, converted_order_id = %s, updated_at = %s
+        WHERE cart_id = %s
     """,
     "cart_session_status": """
-        UPDATE cart_by_session SET user_id = ?, status = ?, updated_at = ?
-        WHERE session_id = ?
+        UPDATE cart_by_session SET user_id = %s, status = %s, updated_at = %s
+        WHERE session_id = %s
     """,
-    "session_user": "UPDATE sessions SET user_id = ? WHERE session_id = ?",
-    "order_status": "UPDATE orders SET status = ?, updated_at = ? WHERE order_id = ?",
+    "session_user": "UPDATE sessions SET user_id = %s WHERE session_id = %s",
+    "order_status": "UPDATE orders SET status = %s, updated_at = %s WHERE order_id = %s",
     "order_status_by_user": """
-        UPDATE orders_by_user SET status = ?
-        WHERE user_id = ? AND created_at = ? AND order_id = ?
+        UPDATE orders_by_user SET status = %s
+        WHERE user_id = %s AND created_at = %s AND order_id = %s
     """,
     "payment_status": """
-        UPDATE payments SET status = ?, processed_at = ?, completed_at = ?,
-            failed_at = ?, refunded_at = ?, failure_reason = ?
-        WHERE payment_id = ?
+        UPDATE payments SET status = %s, processed_at = %s, completed_at = %s,
+            failed_at = %s, refunded_at = %s, failure_reason = %s
+        WHERE payment_id = %s
     """,
     "payment_status_by_order": """
-        UPDATE payments_by_order SET status = ?, completed_at = ?, failed_at = ?
-        WHERE order_id = ? AND attempt_no = ?
+        UPDATE payments_by_order SET status = %s, completed_at = %s, failed_at = %s
+        WHERE order_id = %s AND attempt_no = %s
     """,
 }

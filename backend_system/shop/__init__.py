@@ -1,6 +1,6 @@
 """Commerce platform simulator package.
 
-This package holds the query-first Cassandra model for the shop domain
+This package holds the query-first Postgres model for the shop domain
 (users, traffic, carts, orders, payments) and the day-level synthetic data
 simulator that populates it.
 """

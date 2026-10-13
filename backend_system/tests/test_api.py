@@ -1,7 +1,7 @@
 """Integration tests for the shop API.
 
-These run against a local Cassandra on 127.0.0.1:9042 using a dedicated
-`shop_test` keyspace. They are skipped automatically if Cassandra is not
+These run against a local Postgres on 127.0.0.1:5432 using a dedicated
+`shop_test` database. They are skipped automatically if Postgres is not
 reachable.
 """
 
@@ -9,52 +9,65 @@ from __future__ import annotations
 
 import uuid
 
+import psycopg
 import pytest
-from cassandra.cluster import Cluster
 from fastapi.testclient import TestClient
 
-from shop.schema import create_schema, drop_keyspace
+from shop import pg_schema
 
 HOST = "127.0.0.1"
-PORT = 9042
-TEST_KEYSPACE = "shop_test"
+PORT = 5432
+USER = "shop"
+PASSWORD = "shop"
+TEST_DB = "shop_test"
 
 
-def _cassandra_available() -> bool:
+def _admin_conn():
+    return psycopg.connect(host=HOST, port=PORT, dbname="postgres",
+                           user=USER, password=PASSWORD, connect_timeout=3,
+                           autocommit=True)
+
+
+def _postgres_available() -> bool:
     try:
-        cluster = Cluster([HOST], port=PORT, connect_timeout=3)
-        session = cluster.connect()
-        cluster.shutdown()
+        conn = _admin_conn()
+        conn.close()
         return True
     except Exception:
         return False
 
 
 pytestmark = pytest.mark.skipif(
-    not _cassandra_available(),
-    reason="local Cassandra not reachable on 127.0.0.1:9042",
+    not _postgres_available(),
+    reason="local Postgres not reachable on 127.0.0.1:5432",
 )
 
 
 @pytest.fixture(scope="module")
 def client():
-    cluster = Cluster([HOST], port=PORT, connect_timeout=5)
-    session = cluster.connect()
-    drop_keyspace(session, TEST_KEYSPACE)
-    create_schema(session, TEST_KEYSPACE)
-    cluster.shutdown()
+    admin = _admin_conn()
+    with admin.cursor() as cur:
+        cur.execute(f'DROP DATABASE IF EXISTS "{TEST_DB}"')
+        cur.execute(f'CREATE DATABASE "{TEST_DB}"')
+    admin.close()
+
+    conn = psycopg.connect(host=HOST, port=PORT, dbname=TEST_DB,
+                           user=USER, password=PASSWORD, autocommit=True)
+    pg_schema.reset_schema(conn)
+    conn.close()
 
     from shop.api import create_app
 
-    app = create_app(host=HOST, port=PORT, keyspace=TEST_KEYSPACE)
+    app = create_app(host=HOST, port=PORT, dbname=TEST_DB,
+                     user=USER, password=PASSWORD)
     with TestClient(app) as test_client:
         yield test_client
     app.state.shop_repository.close()
 
-    cluster = Cluster([HOST], port=PORT, connect_timeout=5)
-    session = cluster.connect()
-    drop_keyspace(session, TEST_KEYSPACE)
-    cluster.shutdown()
+    admin = _admin_conn()
+    with admin.cursor() as cur:
+        cur.execute(f'DROP DATABASE IF EXISTS "{TEST_DB}"')
+    admin.close()
 
 
 def _seed_variant(client) -> dict:

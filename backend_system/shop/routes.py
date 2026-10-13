@@ -1,6 +1,6 @@
 """FastAPI routes for the shop commerce platform.
 
-All endpoints operate on the `shop` keyspace. Checkout enforces login (no guest
+All endpoints operate on the `shop` database. Checkout enforces login (no guest
 checkout), and the Lucky Check discount is frozen onto the cart.
 """
 

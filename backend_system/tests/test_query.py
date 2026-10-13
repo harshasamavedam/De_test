@@ -7,16 +7,17 @@ import pytest
 from shop import query
 
 
-@pytest.mark.parametrize("cql", [
+@pytest.mark.parametrize("sql", [
     "SELECT * FROM orders",
     "select order_id from orders limit 5",
     "  SELECT * FROM carts  ;  ",
+    "SELECT o.order_id, i.quantity FROM orders o JOIN order_items i ON i.order_id = o.order_id LIMIT 5",
 ])
-def test_validate_accepts_select(cql):
-    assert query.validate(cql)
+def test_validate_accepts_select(sql):
+    assert query.validate(sql)
 
 
-@pytest.mark.parametrize("cql", [
+@pytest.mark.parametrize("sql", [
     "",
     "   ",
     "DROP TABLE orders",
@@ -24,15 +25,15 @@ def test_validate_accepts_select(cql):
     "UPDATE carts SET status = 'x' WHERE cart_id = 'y'",
     "DELETE FROM orders WHERE order_id = 'x'",
     "SELECT * FROM orders; SELECT * FROM carts",
-    "SELECT * FROM orders ALLOW FILTERING DROP",
+    "SELECT * FROM orders DROP",
 ])
-def test_validate_rejects_bad_queries(cql):
+def test_validate_rejects_bad_queries(sql):
     with pytest.raises(query.QueryError):
-        query.validate(cql)
+        query.validate(sql)
 
 
 def test_presets_present():
     labels = {p["label"] for p in query.PRESETS}
     assert {"Orders", "Payments", "Categories", "Injected issues"} <= labels
     for preset in query.PRESETS:
-        assert query.validate(preset["cql"])
+        assert query.validate(preset["sql"])

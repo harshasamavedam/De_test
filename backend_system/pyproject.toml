@@ -1,7 +1,7 @@
 [project]
 name = "shop-commerce-platform"
 version = "0.1.0"
-description = "Shop commerce platform with a query-first Cassandra model, synthetic data simulator and query API"
+description = "Shop commerce platform with a query-first Postgres model, synthetic data simulator and query API"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
@@ -9,7 +9,6 @@ dependencies = [
     "uvicorn[standard]>=0.24.0",
     "pydantic>=2.5.0",
     "python-multipart>=0.0.16",
-    "cassandra-driver>=3.29.0",
     "sqlalchemy>=2.0.0",
     "pydantic-settings>=2.1.0",
     "pytest>=7.4.3",
@@ -23,6 +22,7 @@ dependencies = [
     "requests>=2.31.0",
     "typing-extensions>=4.8.0",
     "asyncio>=3.4.3",
+    "psycopg[binary]>=3.3.6",
 ]
 
 [project.optional-dependencies]

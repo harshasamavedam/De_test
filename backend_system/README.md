@@ -3,9 +3,9 @@
 ## Overview
 
 This directory contains the backend for a small e-commerce platform: a
-query-first Cassandra model, a day-level synthetic data simulator that feeds
+query-first Postgres model, a day-level synthetic data simulator that feeds
 it, a FastAPI layer for the domain, and a small read-only query UI for
-exploring the data. There is no legacy system; the `payments` keyspace has been
+exploring the data. There is no legacy system; the `payments` database has been
 retired in favour of `shop`.
 
 The simulator is the main deliverable: the API and UI are reference surfaces,
@@ -20,14 +20,14 @@ team.
 Prerequisites: Docker, `uv` (or Python 3.11), and the project's `.venv`.
 
 ```bash
-# 1. Start the local Cassandra node
+# 1. Start the local Postgres
 cd backend_system
 docker compose up -d
 
 # 2. Install dependencies into the project venv (uv-managed, no pip)
 uv sync
 
-# 3. Generate 7 days of data (fresh keyspace)
+# 3. Generate 7 days of data (fresh database)
 uv run python simulate.py \
   --days 7 --start-date 2026-07-09 \
   --users-per-day 1500-2000 --conversion 1.7 \
@@ -55,7 +55,7 @@ backend_system/
 │   ├── config.py                 # sources, categories, discount + sim params
 │   ├── ids.py                    # deterministic id generators
 │   ├── id_factory.py             # runtime ids for API-created entities
-│   ├── schema.py                 # shop keyspace DDL + INSERT statements
+│   ├── pg_schema.py              # shop database DDL + INSERT builder
 │   ├── catalog.py                # categories / products / variants
 │   ├── people.py                 # users, PII, addresses
 │   ├── traffic.py                # sessions, events, source attribution
@@ -63,17 +63,17 @@ backend_system/
 │   ├── orders.py                 # orders, order items
 │   ├── payments.py               # payment attempts, refunds
 │   ├── dirty.py                  # data-quality issue injection + ledger
-│   ├── writer.py                 # Cassandra writer (dry-run aware)
+│   ├── writer.py                 # Postgres writer, batched executemany (dry-run aware)
 │   ├── repository.py             # read/update queries for the API
 │   ├── service.py                # API business logic
 │   ├── api_models.py             # Pydantic request/response schemas
 │   ├── routes.py                 # FastAPI routes
-│   ├── query.py                  # read-only CQL runner for the UI
+│   ├── query.py                  # read-only SQL runner for the UI
 │   ├── ui.py                     # interactive query UI (/ui)
 │   ├── api.py                    # FastAPI app factory
 │   └── simulator.py              # day-level orchestration
 ├── tests/                        # pytest suite
-├── docker-compose.yml            # Local Cassandra container
+├── docker-compose.yml            # Local Postgres container
 └── pyproject.toml                # uv project and dependencies
 ```
 
@@ -111,9 +111,9 @@ Rules baked into the model:
   day, or per `anonymous_id` for guests. Roll value and discount are records,
   not inline `random()` calls.
 
-### Keyspace and tables
+### Database and tables
 
-Keyspace: `shop` (replication `SimpleStrategy`, `rf=1` for local).
+Database: `shop` (single Postgres database, local).
 
 **Identity & traffic**
 
@@ -183,21 +183,21 @@ Step 1b first - it needs no database and proves the generation logic works.
 
 **Step 0 - Prerequisites**
 
-- Docker Desktop (for Cassandra), `uv`, and a terminal in `backend_system/`.
+- Docker Desktop (for Postgres), `uv`, and a terminal in `backend_system/`.
 - Add `uv run` before `python` if you have not activated the project venv.
 
-**Step 1 - Start Cassandra and wait for it to be ready**
+**Step 1 - Start Postgres and wait for it to be ready**
 
 ```bash
 cd backend_system
 docker compose up -d
-docker exec shop-cassandra nodetool status    # wait until the node shows "UN"
+docker exec shop-postgres pg_isready -U shop -d shop   # wait for "accepting connections"
 ```
 
-`UN` means "Up / Normal". The first start can take ~40 seconds. Do not run the
-simulator before you see `UN`, or it will fail to connect.
+The first start can take ~30 seconds (image pull on first run). Do not run the
+simulator before you see `accepting connections`, or it will fail to connect.
 
-**Step 1b (optional) - Dry run without Cassandra**
+**Step 1b (optional) - Dry run without Postgres**
 
 ```bash
 uv run python simulate.py --days 2 --users-per-day 200-400 --conversion 5 --dry-run
@@ -217,7 +217,7 @@ uv run python simulate.py \
   --reset
 ```
 
-- `--reset` drops and recreates the `shop` keyspace, so every run starts clean.
+- `--reset` drops and recreates all `shop` tables, so every run starts clean.
 - The command prints a JSON summary when it finishes.
 
 **Step 3 - Read the summary**
@@ -257,10 +257,9 @@ run it to see rows in a table.
 
 | Symptom | Cause / fix |
 |---------|-------------|
-| `NoHostAvailable` / connection refused | Cassandra not up yet - wait for `UN` in step 1 |
-| `OperationTimedOut` on `DROP KEYSPACE` | Retry; a busy node can be slow to return. Add `--max-inflight 128` if it persists |
-| Run seems slow | Lower `--days`, or raise `--max-inflight`. See [Performance](#performance) |
-| Want to test without Cassandra | Add `--dry-run` to any command |
+| `NoHostAvailable` / connection refused | Postgres not up yet - wait for `accepting connections` in step 1 |
+| Run seems slow | Lower `--days`. Writes go in 1000-row `executemany` batches |
+| Want to test without Postgres | Add `--dry-run` to any command |
 
 ### Inputs (CLI flags)
 
@@ -271,12 +270,13 @@ run it to see rows in a table.
 | `--conversion` | target sessions -> orders percent | `3.5` |
 | `--start-date` | first simulated day `YYYY-MM-DD` | today |
 | `--seed` | RNG seed for reproducibility | `42` |
-| `--host` / `--port` | Cassandra contact point | `127.0.0.1` / `9042` |
-| `--keyspace` | target keyspace | `shop` |
-| `--reset` | drop and recreate the keyspace first | off |
+| `--host` / `--port` | Postgres contact point | `127.0.0.1` / `5432` |
+| `--dbname` | target database | `shop` |
+| `--user` / `--password` | Postgres credentials | `shop` / `shop` |
+| `--reset` | drop and recreate all tables first | off |
 | `--dirty` | quality profile (`realistic` only for now) | `realistic` |
 | `--dry-run` | generate in memory and print a summary, no DB writes | off |
-| `--max-inflight` | max concurrent in-flight writes (throughput vs memory) | `1024` |
+| `--max-inflight` | legacy flag, bounds per-table write buffers | `1024` |
 
 ### Usage
 
@@ -286,10 +286,10 @@ run it to see rows in a table.
 # 30 days, 500-2000 visitors/day, 3.5% conversion, reproducible
 python simulate.py --days 30 --users-per-day 500-2000 --conversion 3.5 --seed 42
 
-# fresh start (drops the shop keyspace) against local Cassandra
+# fresh start (drops all shop tables) against local Postgres
 python simulate.py --days 90 --users-per-day 1000-5000 --conversion 4 --reset
 
-# validate the generation logic without Cassandra
+# validate the generation logic without Postgres
 python simulate.py --days 7 --users-per-day 200-400 --conversion 5 --dry-run
 
 # low-memory / gentle on a small node
@@ -298,7 +298,7 @@ python simulate.py --days 7 --users-per-day 1500-2000 --conversion 1.7 --max-inf
 
 ### What it writes
 
-A run populates the `shop` keyspace (see [Tables](#keyspace-and-tables)) and
+A run populates the `shop` database (see [Tables](#database-and-tables)) and
 records two provenance tables you can query afterwards:
 
 - `simulation_runs` - the run parameters and actuals (sessions, orders,
@@ -309,24 +309,16 @@ records two provenance tables you can query afterwards:
 
 ### Performance
 
-The writer dispatches each insert with `execute_async` and keeps a bounded
-window of in-flight writes (default `1024`), draining the oldest when the
-window is full and flushing the rest on shutdown. This overlaps network
-round-trips instead of paying one per row.
-
-| Setting | Throughput | 7-day run |
-|---------|-----------|-----------|
-| synchronous (old) | ~5.6 sessions/sec | ~35 min |
-| async, `--max-inflight 1024` (default) | ~69 sessions/sec | ~70 sec |
+The writer buffers rows per table and flushes them with `executemany` in
+batches of 1000, so a 400k-event run costs hundreds of round-trips instead of
+hundreds of thousands. `close()` flushes every remaining buffer on shutdown.
 
 Tuning:
 
-- **Faster:** raise `--max-inflight` (e.g. `2048`). Diminishing returns beyond
-  what the node can absorb.
-- **Gentler / lower memory:** lower it (e.g. `--max-inflight 128`) - useful on
-  small nodes or when a `DROP KEYSPACE` timeout suggests the node is saturated.
 - Writes are **not transactional**: a crash mid-run can leave partial data,
   which is fine for synthetic seeding. Re-run with `--reset` for a clean slate.
+- `--max-inflight` is kept as a CLI flag for compatibility but only bounds the
+  per-table buffers; raising it has little effect on Postgres throughput.
 
 ### Day-level realism
 
@@ -379,7 +371,7 @@ doubles as a test oracle:
 
 ### Output
 
-Cassandra only (keyspace `shop`), plus a printed run summary. The run manifest
+Postgres only (database `shop`), plus a printed run summary. The run manifest
 is stored in `simulation_runs` and the injected-issue answer key in
 `injected_issues`; no files are written by default.
 
@@ -387,7 +379,7 @@ is stored in `simulation_runs` and the injected-issue answer key in
 
 ## Shop API
 
-A FastAPI app over the `shop` keyspace for exercising the same domain rules
+A FastAPI app over the `shop` database for exercising the same domain rules
 live. It is a reference/demo surface; the simulator remains the primary tool.
 
 ### Running
@@ -398,7 +390,7 @@ uvicorn shop.api:app --host 0.0.0.0 --port 8100 --reload
 ```
 
 Interactive docs at `http://localhost:8100/docs`. Env overrides:
-`SHOP_CASSANDRA_HOST`, `SHOP_CASSANDRA_PORT`, `SHOP_KEYSPACE`.
+`SHOP_PG_HOST`, `SHOP_PG_PORT`, `SHOP_PG_DB`, `SHOP_PG_USER`, `SHOP_PG_PASSWORD`.
 
 ### Endpoints (`/api/v1`)
 
@@ -440,7 +432,7 @@ the cart's frozen Lucky Check discount carries into the order.
 
 ## Data explorer UI
 
-A small read-only CQL console for understanding the shape of the data. Served
+A small read-only SQL console for understanding the shape of the data. Served
 by the same FastAPI app.
 
 ```
@@ -453,8 +445,9 @@ http://localhost:8100/ui
   containing `INSERT/UPDATE/DELETE/DROP/CREATE/...` is rejected.
 - Results render as a table, capped at 200 rows, with a 10s query timeout.
 
-> Cassandra uses CQL, not SQL - there are no joins or subqueries. This is a
-> guided explorer, not a general database console.
+> Unlike the old Cassandra version, this is real SQL — joins, CTEs and
+> subqueries all work. It is still a guided explorer, not a general console:
+> single `SELECT`/`WITH` statements only.
 
 ---
 
@@ -462,8 +455,8 @@ http://localhost:8100/ui
 
 - **Python 3.11** (`uv` managed)
 - **FastAPI + Uvicorn + Pydantic v2**
-- **Cassandra 5.0** + `cassandra-driver`
-- **Docker Compose** for local Cassandra (container `shop-cassandra`)
+- **Postgres 17** + `psycopg3`
+- **Docker Compose** for local Postgres (container `shop-postgres`)
 - **pytest / pytest-asyncio / httpx** for tests
 - `structlog`, `prometheus-client`, `passlib`, `python-jose` available for
   later hardening
@@ -474,10 +467,10 @@ http://localhost:8100/ui
 pytest
 ```
 
-`tests/test_simulator.py` runs without Cassandra (dry-run generator tests).
+`tests/test_simulator.py` runs without Postgres (dry-run generator tests).
 `tests/test_query.py` covers the read-only query guard. `tests/test_api.py` is
 an integration suite that uses a dedicated `shop_test`
-keyspace on `127.0.0.1:9042`; it is skipped automatically when Cassandra is
+database on `127.0.0.1:5432`; it is skipped automatically when Postgres is
 unreachable.
 
 ## License
