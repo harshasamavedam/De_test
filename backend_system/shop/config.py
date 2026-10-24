@@ -10,7 +10,7 @@ from decimal import Decimal
 # Simulation defaults
 # ---------------------------------------------------------------------------
 
-DEFAULT_KEYSPACE = "shop"
+DEFAULT_DBNAME = "shop"
 DEFAULT_SEED = 42
 DEFAULT_CONVERSION = Decimal("3.5")
 DEFAULT_USERS_PER_DAY = (500, 2000)

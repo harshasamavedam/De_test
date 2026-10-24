@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "timezone": "Asia/Kolkata",
+  "boundaries": "half_open",
+  "filename_template": "{table}_{day}.parquet",
+  "modes": {
+    "daily": "one parquet per day, filtered by date_column in [day, day+1)",
+    "full": "whole table exported once per run, no date filter",
+    "skip": "not exported"
+  },
+  "tables": {
+    "users": {
+      "mode": "daily",
+      "date_column": "created_at",
+      "column_type": "timestamptz"
+    },
+    "users_by_email": {
+      "mode": "daily",
+      "date_column": "created_at",
+      "column_type": "timestamptz"
+    },
+    "user_addresses": {
+      "mode": "daily",
+      "date_column": "created_at",
+      "column_type": "timestamptz"
+    },
+    "sessions": {
+      "mode": "daily",
+      "date_column": "started_at",
+      "column_type": "timestamptz",
+      "alternates": ["ended_at"]
+    },
+    "sessions_by_anonymous": {
+      "mode": "daily",
+      "date_column": "started_at",
+      "column_type": "timestamptz"
+    },
+    "sessions_by_user": {
+      "mode": "daily",
+      "date_column": "started_at",
+      "column_type": "timestamptz"
+    },
+    "identity_map": {
+      "mode": "daily",
+      "date_column": "first_seen",
+      "column_type": "timestamptz",
+      "alternates": ["linked_at"]
+    },
+    "identity_map_by_user": {
+      "mode": "daily",
+      "date_column": "first_seen",
+      "column_type": "timestamptz"
+    },
+    "events": {
+      "mode": "daily",
+      "date_column": "event_at",
+      "column_type": "timestamptz"
+    },
+    "categories": {
+      "mode": "full",
+      "date_column": "created_at",
+      "column_type": "timestamptz"
+    },
+    "products_by_category": {
+      "mode": "full",
+      "date_column": "created_at",
+      "column_type": "timestamptz"
+    },
+    "variants_by_product": {
+      "mode": "full",
+      "date_column": "created_at",
+      "column_type": "timestamptz"
+    },
+    "product_item_by_id": {
+      "mode": "full",
+      "date_column": null,
+      "column_type": null
+    },
+    "carts": {
+      "mode": "daily",
+      "date_column": "created_at",
+      "column_type": "timestamptz",
+      "alternates": ["updated_at"]
+    },
+    "cart_by_session": {
+      "mode": "daily",
+      "date_column": "updated_at",
+      "column_type": "timestamptz"
+    },
+    "cart_by_user": {
+      "mode": "daily",
+      "date_column": "created_at",
+      "column_type": "timestamptz"
+    },
+    "cart_items": {
+      "mode": "daily",
+      "date_column": "added_at",
+      "column_type": "timestamptz"
+    },
+    "orders": {
+      "mode": "daily",
+      "date_column": "created_at",
+      "column_type": "timestamptz",
+      "alternates": ["updated_at"]
+    },
+    "orders_by_user": {
+      "mode": "daily",
+      "date_column": "created_at",
+      "column_type": "timestamptz"
+    },
+    "order_items": {
+      "mode": "full",
+      "date_column": null,
+      "column_type": null,
+      "note": "no timestamp column; child of orders(order_id). Use mode 'join' on orders.created_at if you need it windowed"
+    },
+    "payments": {
+      "mode": "daily",
+      "date_column": "created_at",
+      "column_type": "timestamptz",
+      "note": "completed_at/failed_at/refunded_at are NULL for pending rows - do not filter on them"
+    },
+    "payments_by_order": {
+      "mode": "daily",
+      "date_column": "created_at",
+      "column_type": "timestamptz"
+    },
+    "lucky_rolls": {
+      "mode": "daily",
+      "date_column": "roll_date",
+      "column_type": "date"
+    },
+    "simulation_runs": {
+      "mode": "full",
+      "date_column": "started_at",
+      "column_type": "timestamptz",
+      "note": "run provenance, not simulated data - slice by day only fragments it"
+    },
+    "injected_issues": {
+      "mode": "full",
+      "date_column": "created_at",
+      "column_type": "timestamptz",
+      "note": "run provenance, not simulated data - slice by day only fragments it"
+    }
+  }
+}

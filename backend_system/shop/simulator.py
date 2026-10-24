@@ -53,7 +53,7 @@ class SimParams:
     conversion: Decimal = config.DEFAULT_CONVERSION
     start_date: date = field(default_factory=date.today)
     seed: int = config.DEFAULT_SEED
-    keyspace: str = config.DEFAULT_KEYSPACE
+    dbname: str = config.DEFAULT_DBNAME
     dirty: str = config.DEFAULT_DIRTY_PROFILE
 
 

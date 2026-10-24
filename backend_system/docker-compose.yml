@@ -1,23 +1,21 @@
-version: "3.9"
-
 services:
-  cassandra:
-    image: cassandra:5.0
-    container_name: shop-cassandra
+  postgres:
+    image: postgres:17
+    container_name: shop-postgres
     ports:
-      - "9042:9042"
+      - "5432:5432"
     environment:
-      CASSANDRA_CLUSTER_NAME: payments-cluster  # must match saved data in cassandra_data volume
-      CASSANDRA_DC: dc1
-      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      POSTGRES_USER: shop
+      POSTGRES_PASSWORD: shop
+      POSTGRES_DB: shop
     volumes:
-      - cassandra_data:/var/lib/cassandra
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "bash", "-lc", "nodetool status | grep -q 'UN' || nodetool status | grep -q 'UJ' || exit 1"]
-      interval: 20s
-      timeout: 20s
+      test: ["CMD-SHELL", "pg_isready -U shop -d shop"]
+      interval: 10s
+      timeout: 5s
       retries: 12
-      start_period: 40s
+      start_period: 20s
 
 volumes:
-  cassandra_data:
+  pgdata:

@@ -1,6 +1,6 @@
 """Business logic for the shop API.
 
-Wires the HTTP layer to Cassandra via `ShopRepository`, applying the same
+Wires the HTTP layer to Postgres via `ShopRepository`, applying the same
 domain rules the simulator uses: no guest checkout, identity stitching at
 login, frozen Lucky Check discounts, price-snapshotted order items and
 multi-attempt payments.
